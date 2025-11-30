@@ -46,7 +46,7 @@ def _movie_reasons(file_path: Path) -> list[str]:
         if MOVIE_YEAR_RE.search(stem) and not _looks_like_episode_name(stem):
             reasons.append("filename has year and no episode tag")
         return reasons
-    return False
+    return []
 
 
 def process_directory_movies_any(wd: Path, adult_only: bool, counters: dict) -> bool:
@@ -57,9 +57,12 @@ def process_directory_movies_any(wd: Path, adult_only: bool, counters: dict) -> 
             continue
 
         # Check if it's a tar file
-        if file_path.suffix.lower() in ['.tar', '.tar.gz']:
-            extract_videos_from_tar(str(file_path))
-            counters['tar_successes'] += 1
+        if file_path.name.lower().endswith((".tar", ".tar.gz")):
+            try:
+                extract_videos_from_tar(str(file_path), tv_like=False)
+                counters["tar_successes"] += 1
+            except Exception:
+                counters["tar_failures"] += 1
             did_work = True
             continue
 
@@ -104,19 +107,17 @@ def process_directory_tv_via_csv(wd: Path, df: pd.DataFrame, is_root_slot: bool,
             continue
 
         # Check if it's a tar file
-        if file_path.suffix.lower() in ['.tar', '.tar.gz']:
+        if file_path.name.lower().endswith((".tar", ".tar.gz")):
             with with_lock(ROOT_SLOT_LOCK) as have_lock:
                 if not have_lock:
                     continue
                 try:
-                    extract_videos_from_tar(str(file_path))
-                    counters['tar_successes'] += 1
-                    did_work = True
-                except Exception as e:
+                    extract_videos_from_tar(str(file_path), tv_like=True)
+                    counters["tar_successes"] += 1
+                except Exception:
                     counters["tar_failures"] += 1
-                    did_work = True
+                did_work = True
             continue
-            
 
         with file_sidecar_lock(file_path) as ours:
             if not ours:
@@ -202,41 +203,46 @@ def process_directory_tv_via_csv(wd: Path, df: pd.DataFrame, is_root_slot: bool,
     return did_work
 
 
-def extract_videos_from_tar(file_path: str) -> None:
+def extract_videos_from_tar(file_path: str, tv_like: bool) -> None:
     """
-    Extract video files from a .tar or .tar.gz file to the current working directory
-    and move the original .tar file to a "ConversionFailures" directory.
+    Extract video files from a .tar or .tar.gz file to ROOT_DIR
+    and move the original archive to the appropriate failures subdir.
+
+    tv_like=True  -> FAILURE_DIR / "tv"
+    tv_like=False -> FAILURE_DIR / "movie"
     """
-    
     try:
-        # Check if the file is a .tar or .tar.gz file
-        if os.path.splitext(file_path)[1] not in ['.tar', '.tar.gz']:
+        # Be tolerant of tar variants; this also fixes the .tar.gz detection
+        if not tarfile.is_tarfile(file_path):
             logger.warning(f"Skipping non-tar file: {file_path}")
             return
 
         logger.debug(f"Starting extraction of {os.path.basename(file_path)}")
 
-        # Extract files from the tar archive
-        with tarfile.open(file_path, "r:*") as tar:
-            for member in tar.getmembers():
-                # Skip directories and non-video files
-                if os.path.splitext(member.name)[1].lower() not in [
-                    '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv',
-                    '.mts', '.m2ts', '.iso'
-                ]:
-                    continue
+        video_exts = {
+            ".mp4", ".avi", ".mkv", ".mov", ".wmv",
+            ".flv", ".mts", ".m2ts", ".iso"
+        }
 
+        # Open and iterate members
+        with tarfile.open(file_path, "r:*") as tf:
+            for member in tf.getmembers():
+                if member.isdir():
+                    continue
+                if Path(member.name).suffix.lower() not in video_exts:
+                    continue
                 logger.debug(f"Extracting {member.name}")
-                tar.extract(member, path=ROOT_DIR, filter='data')
+                tf.extract(member, path=ROOT_DIR)
 
         logger.info(f"Successfully extracted files from {os.path.basename(file_path)}")
 
-        # Move the original .tar file to ConversionFailures directory
-        _move_to_failures(Path(file_path), tv_like=True)
+        # Move original tar to ConversionFailures (tv or movie bucket)
+        _move_to_failures(Path(file_path), tv_like=tv_like)
 
     except Exception as e:
-        logger.error(f"Error processing file {file_path}: {str(e)}")
-        raise  # Re-raise the exception or handle it as needed
+        logger.error(f"Error processing file {file_path}: {e}")
+        raise
+
 
 def main():
     did_work = False

@@ -77,18 +77,17 @@ FAILURE_WARN_DAYS_BEFORE = tuple(int(x) for x in _warn_list)
 
 # ---------- Static patterns (not sensitive) ----------
 EPISODE_PATTERNS = [
-    # Matches "E03", "e03", "E3" (not part of a longer token)
-    re.compile(r"(?:^|[^A-Za-z0-9])E(\d{1,3})(?!\d)", re.IGNORECASE),
+    # E03, E03v2, etc.
+    re.compile(r"(?:^|[^A-Za-z0-9])E(\d{1,3})\s*(?:v(\d+))?(?!\d)", re.IGNORECASE),
 
-    # Matches "x03", "x3"
-    re.compile(r"\bx(\d{1,3})(?!\d)", re.IGNORECASE),
+    # x03, x03v2, etc.
+    re.compile(r"\bx(\d{1,3})\s*(?:v(\d+))?(?!\d)", re.IGNORECASE),
 
-    # Matches a hyphen (any dash) followed by episode number before a bracket/paren/period/end
-    # e.g. "Part 2 - 03 [1080p...]" or "S3 - 03 (1080p)" or "Show - 12.mkv"
-    re.compile(r"[-–—]\s*(\d{1,3})(?=\s*(?:\[|\(|\.|$))"),
+    # Show - 12 / Show - 12v2
+    re.compile(r"[-–—]\s*(\d{1,3})\s*(?:v(\d+))?(?=\s*(?:\[|\(|\.|$))"),
 
-    # Matches "Episode 03", "Ep 03", "Ep.03", "Ep-03"
-    re.compile(r"\b(?:Episode|Ep|Ep\.)[\s\.\-:]*?(\d{1,3})\b", re.IGNORECASE),
+    # Episode 03, Ep 03v2, etc.
+    re.compile(r"\b(?:Episode|Ep|Ep\.)[\s\.\-:]*?(\d{1,3})\s*(?:v(\d+))?\b", re.IGNORECASE),
 ]
 
 # Filename substitutions for output naming; includes {crf} and {bit}

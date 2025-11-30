@@ -1,7 +1,6 @@
 import re
 import json
 import urllib.request
-from pathlib import Path
 from .logging_setup import logger
 from .logging_setup import LOGS_DIR
 
@@ -28,7 +27,8 @@ def extract_title_from_filename(filename: str) -> str:
     name = re.sub(r'\([^)]*\)', '', name)
     name = re.sub(r'\[[^\]]*\]', '', name)
     name = name.replace('_', ' ').replace('.', ' ')
-    name = re.split(r'\s+-\s+\d{1,4}\b', name, maxsplit=1)[0]
+        # Strip trailing " - 22" or " - 22v2" style episode markers from title
+    name = re.split(r'\s+-\s+\d{1,4}(?:v\d+)?\b?', name, maxsplit=1)[0]
     name = re.sub(r'\b(S(?:eason)?\s*\d{1,2})\b', '', name, flags=re.I)
     name = re.sub(r'\b(480p|720p|1080p|2160p|4k|x264|x265|hevc|avc|h\.?264|h\.?265|webrip|web[- ]?dl|bluray|brrip|repack)\b', '', name, flags=re.I)
     name = re.sub(r'\b\d{1,4}\b$', '', name)
@@ -78,7 +78,7 @@ def lookup_jikan(query: str):
         title = (best.get('title_english') or best.get('title') or '').strip() or None
         aired_from = (best.get('aired') or {}).get('from') or ''
         year = None
-        if isinstance(aired_from, str) and len(aired_from) >= 4 and aired_from[:4].isdigit():
+        if aired_from and isinstance(aired_from, str) and len(aired_from) >= 4 and aired_from[:4].isdigit():
             year = int(aired_from[:4])
         return title, year
     except Exception as e:

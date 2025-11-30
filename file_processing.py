@@ -3,6 +3,8 @@ import subprocess
 import pandas as pd
 import time
 import os
+import urllib.request
+import re 
 from pathlib import Path
 
 from .config import (
@@ -13,7 +15,7 @@ from .ffmpeg_helpers import build_ffmpeg_cmd, run_ffprobe_json, get_source_bit_d
 from .metadata_lookup import extract_title_from_filename, lookup_anilist, lookup_jikan
 from .crf_helpers import determine_crf
 from .utils import sanitize_folder_name, get_tmp_dir, is_lock_file, is_nfs_file
-from .naming import derive_movie_folder_name, get_final_dest_dir, build_output_name, tag_episode_in_name
+from .naming import derive_movie_folder_name, get_final_dest_dir, build_output_name, tag_episode_in_name, extract_episode_number_and_version
 
 
 def _refresh_plex_libraries():
@@ -21,7 +23,6 @@ def _refresh_plex_libraries():
         return
     for url in PLEX_REFRESH_URLS:
         try:
-            import urllib.request
             with urllib.request.urlopen(url, timeout=5):
                 pass
         except Exception as e:
@@ -51,6 +52,52 @@ def _move_to_failures(file_path: Path, tv_like: bool):
 def _movie_final_dest_dir(base_dir: Path, file_path: Path) -> Path:
     return base_dir / sanitize_folder_name(derive_movie_folder_name(file_path))
 
+def _find_existing_episode_version(final_dest_dir: Path, season: int, episode: int) -> int:
+    """
+    Scan final_dest_dir for files matching S{season:02d}E{episode:02d}[vN].
+    Returns the highest found version (0 if none).
+    """
+    tag = f"S{season:02d}E{episode:02d}"
+    pat = re.compile(re.escape(tag) + r"(?:v(?P<ver>\d+))?", re.IGNORECASE)
+    max_ver = 0
+    for p in final_dest_dir.iterdir():
+        if not p.is_file():
+            continue
+        m = pat.search(p.name)
+        if not m:
+            continue
+        ver_str = m.group("ver")
+        ver = int(ver_str) if ver_str and ver_str.isdigit() else 1
+        if ver > max_ver:
+            max_ver = ver
+    return max_ver
+
+
+def _delete_older_episode_versions(final_dest_dir: Path, season: int, episode: int, keep_version: int) -> None:
+    """
+    In final_dest_dir, delete all files for S{season}E{episode} with version < keep_version.
+    """
+    if keep_version <= 1:
+        # Nothing to clean up when we keep v1 as the only version.
+        return
+
+    tag = f"S{season:02d}E{episode:02d}"
+    pat = re.compile(re.escape(tag) + r"(?:v(?P<ver>\d+))?", re.IGNORECASE)
+    for p in final_dest_dir.iterdir():
+        if not p.is_file():
+            continue
+        m = pat.search(p.name)
+        if not m:
+            continue
+        ver_str = m.group("ver")
+        ver = int(ver_str) if ver_str and ver_str.isdigit() else 1
+        if ver < keep_version:
+            try:
+                p.unlink()
+                logger.info(f"Removed older version v{ver} of {tag}: {p}")
+            except Exception as e:
+                logger.warning(f"Failed to remove older version {p}: {e}")
+
 
 def process_file(file_path: Path, row: pd.Series, media_type: str) -> bool:
     # Skip junk/locks
@@ -62,6 +109,15 @@ def process_file(file_path: Path, row: pd.Series, media_type: str) -> bool:
     adult_only = bool(row["AdultOnly"])
     show = str(row.get("Show", "")).strip()
     move_only = bool(row.get("MoveOnly", 0))
+
+    # Versioning info for TV episodes
+    episode_for_versioning = None
+    version_num = None
+    if media_type == "tv" and season > 0:
+        info = extract_episode_number_and_version(file_path.name, offset)
+        if info is not None:
+            episode_for_versioning, version_num = info
+
 
     # ==== TV-only Anime lookup (avoid hitting AniList/Jikan for movies) ====
     if media_type == "tv" and not show:
@@ -87,6 +143,33 @@ def process_file(file_path: Path, row: pd.Series, media_type: str) -> bool:
 
     final_dest_dir.mkdir(parents=True, exist_ok=True)
 
+    # Version check for TV episodes: skip processing if a newer (or same) version already exists
+    if (
+        media_type == "tv"
+        and season > 0
+        and episode_for_versioning is not None
+        and version_num is not None
+    ):
+        existing_max = _find_existing_episode_version(final_dest_dir, season, episode_for_versioning)
+        if existing_max > 0:
+            if existing_max > version_num:
+                # Example: v3 already exists, this is v2 -> fail as "newer version already exists"
+                logger.info(
+                    f"Skipping {file_path.name}: newer version v{existing_max} for "
+                    f"S{season:02d}E{episode_for_versioning:02d} already exists in {final_dest_dir}"
+                )
+                _move_to_failures(file_path, tv_like=True)
+                return False
+            if existing_max == version_num:
+                # Same version also treated as duplicate and failed
+                logger.info(
+                    f"Skipping {file_path.name}: same version v{version_num} for "
+                    f"S{season:02d}E{episode_for_versioning:02d} already exists in {final_dest_dir}"
+                )
+                _move_to_failures(file_path, tv_like=True)
+                return False
+
+
     # Probe codec of the input
     codec_info = run_ffprobe_json([
         "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -98,8 +181,18 @@ def process_file(file_path: Path, row: pd.Series, media_type: str) -> bool:
     if move_only or (codec in ["hevc", "av1"] and not FORCE_REENCODE):
         shutil.move(str(file_path), str(final_dest_dir / file_path.name))
         logger.info(f"Moved {file_path.name} -> {final_dest_dir}")
+
+        if (
+            media_type == "tv"
+            and season > 0
+            and episode_for_versioning is not None
+            and version_num is not None
+        ):
+            _delete_older_episode_versions(final_dest_dir, season, episode_for_versioning, version_num)
+
         _refresh_plex_libraries()
         return True
+
 
     # ==== Encode on local disk (TMP_DIR), then move result to NAS ====
     TMP_DIR = get_tmp_dir()
@@ -132,6 +225,15 @@ def process_file(file_path: Path, row: pd.Series, media_type: str) -> bool:
         shutil.move(str(tmp_output), str(final_output))
         file_path.unlink(missing_ok=True)
         logger.info(f"Successfully converted {file_path.name} -> {final_output}")
+
+        if (
+            media_type == "tv"
+            and season > 0
+            and episode_for_versioning is not None
+            and version_num is not None
+        ):
+            _delete_older_episode_versions(final_dest_dir, season, episode_for_versioning, version_num)
+
         _refresh_plex_libraries()
         return True
     except subprocess.CalledProcessError as e:

@@ -66,30 +66,52 @@ def tag_episode_in_name(original_name: str, base_name: str, season: int, offset:
     if re.search(r"S\d{2}E\d{2}", base_name, re.IGNORECASE):
         return base_name
 
+    info = extract_episode_number_and_version(original_name, offset)
+    if info is None:
+        return base_name
+
+    episode, ver = info
+
+    ep_fmt = f"S{season:02d}E{episode:02d}"
+    if ver > 1:
+        ep_fmt = f"{ep_fmt}v{ver}"
+
+    # Replace " - 22" or " - 22v2" (etc) with " - SxxEyyvN"
+    base_name = re.sub(
+        r"(?: - )\d{1,3}\s*(?:v\d+)?",
+        f" - {ep_fmt}",
+        base_name,
+    )
+    return base_name
+
+
+def extract_episode_number_and_version(original_name: str, offset: int) -> tuple[int, int] | None:
+    """
+    From the original filename, extract:
+      - corrected episode number (honoring offset, including negative offsets)
+      - version number (v2, v3, ...) or 1 if no explicit version
+    Returns (episode, version) or None if no episode number can be found.
+    """
     ep_num = None
-    ep_ver = None
+    ver = 1
     for pat in EPISODE_PATTERNS:
         m = pat.search(original_name)
         if m:
             try:
                 ep_num = int(m.group(1))
-                ep_ver = str(m.group(2))
+                # If regex has a second capturing group and it's set, treat as version
+                if m.lastindex and m.lastindex >= 2 and m.group(2):
+                    ver = int(m.group(2))
                 break
             except Exception:
                 pass
+
     if ep_num is None:
-        return base_name
+        return None
 
-    corrected_episode = ep_num - offset if offset > 0 else ep_num
-    if corrected_episode < 1:
-        corrected_episode = ep_num
+    corrected = ep_num - offset
+    if corrected < 1:
+        corrected = ep_num
 
-    ep_fmt = f"S{season:02d}E{corrected_episode:02d}"
+    return corrected, ver
 
-    # Check for the presence of " - " followed by a digit and replace it if found
-    if isinstance(ep_ver, str) and ep_ver.strip():
-        base_name = re.sub(r"(?: - )\d{1,3}", f" - {ep_fmt} ", base_name)
-    else:
-        base_name = re.sub(r"(?: - )\d{1,3}", f" - {ep_fmt}", base_name)
-    
-    return base_name
