@@ -1,0 +1,40 @@
+{
+  "paths": {
+    "root_dir": "/path/to/downloads",
+    "tv_dir": "/path/to/plex/tv",
+    "ao_tv_dir": "/path/to/plex/adult_only/tv",
+    "movie_dir": "/path/to/plex/movies",
+    "ao_movie_dir": "/path/to/plex/adult_only/movies",
+    "csv_file_path": "/path/to/process_tv.csv",
+    "failure_dir": "/path/to/conversion_failures",
+    "tmp_base_dir": "/var/tmp/mediaprocess",
+    "root_movie_subdirs": [
+      { "name": "movies",   "adult_only": false },
+      { "name": "4kmovies", "adult_only": false },
+      { "name": "ao_movies","adult_only": true  }
+    ]
+  },
+  "plex": {
+    "scheme": "http",
+    "ip": "127.0.0.1",
+    "port": 32400,
+    "token": "REPLACE_WITH_TOKEN",
+    "sections": [2, 3, 4]
+  },
+  "encode": {
+    "preset_default": 6,
+    "timeout_seconds": 3600,
+    "tv_crf_fallback": 40,
+    "movie_crf_defaults": {
+      "1080p": 30,
+      "4k": 28
+    }
+  },
+  "temp": {
+    "stale_tmp_age_seconds": 86400
+  },
+  "retention": {
+    "failure_retention_days": 14,
+    "failure_warn_days_before": [5, 3, 2, 1]
+  }
+}
